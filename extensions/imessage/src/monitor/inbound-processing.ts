@@ -31,6 +31,7 @@ import {
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-runtime";
 import { resolveIMessageConversationRoute } from "../conversation-route.js";
+import { rememberIMessageReplyCache } from "../monitor-reply-cache.js";
 import {
   formatIMessageChatTarget,
   isAllowedIMessageSender,
@@ -550,6 +551,19 @@ export function buildIMessageInboundContext(params: {
   const chatId = decision.chatId;
   const chatTarget =
     decision.isGroup && chatId != null ? formatIMessageChatTarget(chatId) : undefined;
+  const messageGuid = normalizeReplyField(params.message.guid);
+  const rememberedMessage = messageGuid
+    ? rememberIMessageReplyCache({
+        accountId: decision.route.accountId,
+        messageId: messageGuid,
+        chatGuid: decision.chatGuid,
+        chatIdentifier: decision.chatIdentifier,
+        chatId: decision.chatId,
+        timestamp: Date.now(),
+      })
+    : null;
+  const messageSid =
+    rememberedMessage?.shortId || (params.message.id ? String(params.message.id) : undefined);
 
   const replySuffix = decision.replyContext
     ? `\n\n[Replying to ${decision.replyContext.sender ?? "unknown sender"}${
@@ -629,7 +643,8 @@ export function buildIMessageInboundContext(params: {
     SenderId: decision.sender,
     Provider: "imessage",
     Surface: "imessage",
-    MessageSid: params.message.id ? String(params.message.id) : undefined,
+    MessageSid: messageSid,
+    MessageSidFull: messageGuid,
     ReplyToId: decision.replyContext?.id,
     ReplyToBody: decision.replyContext?.body,
     ReplyToSender: decision.replyContext?.sender,

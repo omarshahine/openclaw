@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { extname, join } from "node:path";
 import { createIMessageRpcClient } from "./client.js";
+import { resolveIMessageMessageId as resolveIMessageMessageIdImpl } from "./monitor-reply-cache.js";
 import type { IMessageTarget } from "./targets.js";
 
 type CliRunOptions = {
@@ -180,6 +181,8 @@ async function withTempFile<T>(input: TempFileInput, fn: (path: string) => Promi
 }
 
 export const imessageActionsRuntime = {
+  resolveIMessageMessageId: resolveIMessageMessageIdImpl,
+
   async resolveChatGuidForTarget(params: {
     target: Extract<IMessageTarget, { kind: "chat_id" | "chat_identifier" }>;
     options: CliRunOptions;

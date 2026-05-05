@@ -6,6 +6,7 @@ const probeMock = vi.hoisted(() => ({
 }));
 
 const runtimeMock = vi.hoisted(() => ({
+  resolveIMessageMessageId: vi.fn((id: string) => id),
   resolveChatGuidForTarget: vi.fn(),
   sendReaction: vi.fn(),
   sendRichMessage: vi.fn(),
@@ -155,6 +156,40 @@ describe("imessage message actions", () => {
     expect(runtimeMock.sendReaction).toHaveBeenCalledWith(
       expect.objectContaining({
         chatGuid: "iMessage;+;resolved",
+      }),
+    );
+  });
+
+  it("resolves short message ids before invoking bridge actions", async () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: {},
+    });
+    runtimeMock.resolveIMessageMessageId.mockReturnValueOnce("full-guid");
+    runtimeMock.sendReaction.mockResolvedValue(undefined);
+
+    await imessageMessageActions.handleAction?.({
+      action: "react",
+      cfg: cfg(),
+      params: {
+        chatGuid: "iMessage;+;chat0000",
+        messageId: "1",
+        emoji: "👍",
+      },
+    } as never);
+
+    expect(runtimeMock.resolveIMessageMessageId).toHaveBeenCalledWith("1", {
+      requireKnownShortId: true,
+      chatContext: {
+        chatGuid: "iMessage;+;chat0000",
+        chatIdentifier: undefined,
+        chatId: undefined,
+      },
+    });
+    expect(runtimeMock.sendReaction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "full-guid",
       }),
     );
   });

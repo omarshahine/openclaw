@@ -15,6 +15,7 @@ import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runti
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { resolveIMessageAccount } from "./accounts.js";
 import { IMESSAGE_ACTION_NAMES, IMESSAGE_ACTIONS } from "./actions-contract.js";
+import type { IMessageChatContext } from "./monitor-reply-cache.js";
 import { normalizeIMessageMessagingTarget } from "./normalize.js";
 import { getCachedIMessagePrivateApiStatus } from "./probe.js";
 import { parseIMessageTarget, type IMessageTarget } from "./targets.js";
@@ -46,6 +47,10 @@ const PRIVATE_API_ACTIONS = new Set<ChannelMessageActionName>([
 
 function readMessageText(params: Record<string, unknown>): string | undefined {
   return readStringParam(params, "text") ?? readStringParam(params, "message");
+}
+
+function readMessageId(params: Record<string, unknown>): string {
+  return readStringParam(params, "messageId", { required: true });
 }
 
 function isGroupTarget(raw?: string | null): boolean {
@@ -135,6 +140,32 @@ function formatUnresolvedTarget(
   return target.kind === "chat_id"
     ? `chat_id:${target.chatId}`
     : `chat_identifier:${target.chatIdentifier}`;
+}
+
+function buildChatContextFromActionParams(params: {
+  actionParams: Record<string, unknown>;
+  currentChannelId?: string;
+}): IMessageChatContext {
+  const explicitChatGuid = readStringParam(params.actionParams, "chatGuid")?.trim();
+  const explicitChatIdentifier = readStringParam(params.actionParams, "chatIdentifier")?.trim();
+  const explicitChatId = readNumberParam(params.actionParams, "chatId", { integer: true });
+  const rawTarget =
+    readStringParam(params.actionParams, "to") ??
+    readStringParam(params.actionParams, "target") ??
+    params.currentChannelId;
+  const target = rawTarget ? parseIMessageTarget(rawTarget) : null;
+  return {
+    chatGuid: explicitChatGuid || (target?.kind === "chat_guid" ? target.chatGuid : undefined),
+    chatIdentifier:
+      explicitChatIdentifier ||
+      (target?.kind === "chat_identifier" ? target.chatIdentifier : undefined),
+    chatId:
+      typeof explicitChatId === "number"
+        ? explicitChatId
+        : target?.kind === "chat_id"
+          ? target.chatId
+          : undefined,
+  };
 }
 
 function mapTapbackReaction(emoji?: string): string | undefined {
@@ -273,6 +304,14 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         runtime,
         options: opts,
       });
+    const messageId = () =>
+      runtime.resolveIMessageMessageId(readMessageId(params), {
+        requireKnownShortId: true,
+        chatContext: buildChatContextFromActionParams({
+          actionParams: params,
+          currentChannelId: toolContext?.currentChannelId,
+        }),
+      });
 
     if (action === "react") {
       assertPrivateApiEnabled();
@@ -285,12 +324,12 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
           "iMessage react supports love, like, dislike, laugh, emphasize, and question tapbacks.",
         );
       }
-      const messageId = readStringParam(params, "messageId", { required: true });
+      const resolvedMessageId = messageId();
       const partIndex = readNumberParam(params, "partIndex", { integer: true });
       const resolvedChatGuid = await chatGuid();
       await runtime.sendReaction({
         chatGuid: resolvedChatGuid,
-        messageId,
+        messageId: resolvedMessageId,
         reaction,
         remove: remove || undefined,
         partIndex: typeof partIndex === "number" ? partIndex : undefined,
@@ -301,7 +340,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
 
     if (action === "edit") {
       assertPrivateApiEnabled();
-      const messageId = readStringParam(params, "messageId", { required: true });
+      const resolvedMessageId = messageId();
       const text =
         readStringParam(params, "text") ??
         readStringParam(params, "newText") ??
@@ -314,32 +353,32 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       const resolvedChatGuid = await chatGuid();
       await runtime.editMessage({
         chatGuid: resolvedChatGuid,
-        messageId,
+        messageId: resolvedMessageId,
         text,
         backwardsCompatMessage: backwardsCompatMessage ?? undefined,
         partIndex: typeof partIndex === "number" ? partIndex : undefined,
         options: { ...opts, chatGuid: resolvedChatGuid },
       });
-      return jsonResult({ ok: true, edited: messageId });
+      return jsonResult({ ok: true, edited: resolvedMessageId });
     }
 
     if (action === "unsend") {
       assertPrivateApiEnabled();
-      const messageId = readStringParam(params, "messageId", { required: true });
+      const resolvedMessageId = messageId();
       const partIndex = readNumberParam(params, "partIndex", { integer: true });
       const resolvedChatGuid = await chatGuid();
       await runtime.unsendMessage({
         chatGuid: resolvedChatGuid,
-        messageId,
+        messageId: resolvedMessageId,
         partIndex: typeof partIndex === "number" ? partIndex : undefined,
         options: { ...opts, chatGuid: resolvedChatGuid },
       });
-      return jsonResult({ ok: true, unsent: messageId });
+      return jsonResult({ ok: true, unsent: resolvedMessageId });
     }
 
     if (action === "reply") {
       assertPrivateApiEnabled();
-      const messageId = readStringParam(params, "messageId", { required: true });
+      const resolvedMessageId = messageId();
       const text = readMessageText(params);
       if (!text) {
         throw new Error("iMessage reply requires text or message.");
@@ -349,11 +388,11 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       const result = await runtime.sendRichMessage({
         chatGuid: resolvedChatGuid,
         text,
-        replyToMessageId: messageId,
+        replyToMessageId: resolvedMessageId,
         partIndex: typeof partIndex === "number" ? partIndex : undefined,
         options: { ...opts, chatGuid: resolvedChatGuid },
       });
-      return jsonResult({ ok: true, messageId: result.messageId, repliedTo: messageId });
+      return jsonResult({ ok: true, messageId: result.messageId, repliedTo: resolvedMessageId });
     }
 
     if (action === "sendWithEffect") {
