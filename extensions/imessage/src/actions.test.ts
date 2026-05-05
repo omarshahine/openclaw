@@ -6,6 +6,7 @@ const probeMock = vi.hoisted(() => ({
 }));
 
 const runtimeMock = vi.hoisted(() => ({
+  resolveChatGuidForTarget: vi.fn(),
   sendReaction: vi.fn(),
   sendRichMessage: vi.fn(),
   sendAttachment: vi.fn(),
@@ -123,6 +124,68 @@ describe("imessage message actions", () => {
         chatGuid: "iMessage;+;chat0000",
         messageId: "message-guid",
         reaction: "like",
+      }),
+    );
+  });
+
+  it("resolves chat_id targets before invoking bridge actions", async () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: {},
+    });
+    runtimeMock.resolveChatGuidForTarget.mockResolvedValue("iMessage;+;resolved");
+    runtimeMock.sendReaction.mockResolvedValue(undefined);
+
+    await imessageMessageActions.handleAction?.({
+      action: "react",
+      cfg: cfg(),
+      params: {
+        target: "chat_id:42",
+        messageId: "message-guid",
+        emoji: "👍",
+      },
+    } as never);
+
+    expect(runtimeMock.resolveChatGuidForTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: { kind: "chat_id", chatId: 42 },
+      }),
+    );
+    expect(runtimeMock.sendReaction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chatGuid: "iMessage;+;resolved",
+      }),
+    );
+  });
+
+  it("resolves chat_identifier targets before invoking bridge actions", async () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: {},
+    });
+    runtimeMock.resolveChatGuidForTarget.mockResolvedValue("iMessage;+;resolved-ident");
+    runtimeMock.sendRichMessage.mockResolvedValue({ messageId: "reply-guid" });
+
+    await imessageMessageActions.handleAction?.({
+      action: "reply",
+      cfg: cfg(),
+      params: {
+        chatIdentifier: "team-thread",
+        messageId: "message-guid",
+        text: "reply",
+      },
+    } as never);
+
+    expect(runtimeMock.resolveChatGuidForTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: { kind: "chat_identifier", chatIdentifier: "team-thread" },
+      }),
+    );
+    expect(runtimeMock.sendRichMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chatGuid: "iMessage;+;resolved-ident",
       }),
     );
   });

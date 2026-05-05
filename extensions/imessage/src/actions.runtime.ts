@@ -2,9 +2,12 @@ import { spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { extname, join } from "node:path";
+import { createIMessageRpcClient } from "./client.js";
+import type { IMessageTarget } from "./targets.js";
 
 type CliRunOptions = {
   cliPath: string;
+  dbPath?: string;
   timeoutMs?: number;
 };
 
@@ -20,6 +23,63 @@ type TempFileInput = {
   buffer: Uint8Array;
   filename: string;
 };
+
+type IMessageChatListResponse = {
+  chats?: unknown;
+};
+
+function asChatList(value: unknown): Array<Record<string, unknown>> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return [];
+  }
+  const chats = (value as IMessageChatListResponse).chats;
+  if (!Array.isArray(chats)) {
+    return [];
+  }
+  return chats.filter(
+    (chat): chat is Record<string, unknown> =>
+      chat != null && typeof chat === "object" && !Array.isArray(chat),
+  );
+}
+
+function numberFromUnknown(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Number(value.trim());
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
+function stringFromUnknown(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function findChatGuid(
+  chats: readonly Record<string, unknown>[],
+  target: Extract<IMessageTarget, { kind: "chat_id" | "chat_identifier" }>,
+): string | null {
+  for (const chat of chats) {
+    const id = numberFromUnknown(chat.id);
+    const identifier = stringFromUnknown(chat.identifier);
+    const guid = stringFromUnknown(chat.guid);
+    if (target.kind === "chat_id" && id === target.chatId && guid) {
+      return guid;
+    }
+    if (
+      target.kind === "chat_identifier" &&
+      (identifier === target.chatIdentifier || guid === target.chatIdentifier) &&
+      guid
+    ) {
+      return guid;
+    }
+  }
+  return null;
+}
 
 async function runIMessageCliJson(
   args: readonly string[],
@@ -120,6 +180,26 @@ async function withTempFile<T>(input: TempFileInput, fn: (path: string) => Promi
 }
 
 export const imessageActionsRuntime = {
+  async resolveChatGuidForTarget(params: {
+    target: Extract<IMessageTarget, { kind: "chat_id" | "chat_identifier" }>;
+    options: CliRunOptions;
+  }): Promise<string | null> {
+    const client = await createIMessageRpcClient({
+      cliPath: params.options.cliPath,
+      dbPath: params.options.dbPath,
+    });
+    try {
+      const result = await client.request<IMessageChatListResponse>(
+        "chats.list",
+        { limit: 1000 },
+        { timeoutMs: params.options.timeoutMs },
+      );
+      return findChatGuid(asChatList(result), params.target);
+    } finally {
+      await client.stop();
+    }
+  },
+
   async sendReaction(params: {
     chatGuid: string;
     messageId: string;

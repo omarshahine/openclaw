@@ -17,7 +17,7 @@ import { resolveIMessageAccount } from "./accounts.js";
 import { IMESSAGE_ACTION_NAMES, IMESSAGE_ACTIONS } from "./actions-contract.js";
 import { normalizeIMessageMessagingTarget } from "./normalize.js";
 import { getCachedIMessagePrivateApiStatus } from "./probe.js";
-import { parseIMessageTarget } from "./targets.js";
+import { parseIMessageTarget, type IMessageTarget } from "./targets.js";
 
 const loadIMessageActionsRuntime = createLazyRuntimeNamedExport(
   () => import("./actions.runtime.js"),
@@ -59,14 +59,48 @@ function isGroupTarget(raw?: string | null): boolean {
   );
 }
 
-function resolveChatGuid(params: {
+type IMessageActionsRuntime = Awaited<ReturnType<typeof loadIMessageActionsRuntime>>;
+
+async function resolveChatGuid(params: {
   action: ChannelMessageActionName;
   actionParams: Record<string, unknown>;
   currentChannelId?: string;
-}): string {
+  runtime: IMessageActionsRuntime;
+  options: {
+    cliPath: string;
+    dbPath?: string;
+    timeoutMs?: number;
+  };
+}): Promise<string> {
   const explicitChatGuid = readStringParam(params.actionParams, "chatGuid");
   if (explicitChatGuid) {
     return explicitChatGuid;
+  }
+  const explicitChatId = readNumberParam(params.actionParams, "chatId", { integer: true });
+  if (typeof explicitChatId === "number") {
+    const resolved = await params.runtime.resolveChatGuidForTarget({
+      target: { kind: "chat_id", chatId: explicitChatId },
+      options: params.options,
+    });
+    if (resolved) {
+      return resolved;
+    }
+    throw new Error(
+      `iMessage ${params.action} failed: chatGuid not found for chat_id:${explicitChatId}.`,
+    );
+  }
+  const explicitChatIdentifier = readStringParam(params.actionParams, "chatIdentifier");
+  if (explicitChatIdentifier) {
+    const resolved = await params.runtime.resolveChatGuidForTarget({
+      target: { kind: "chat_identifier", chatIdentifier: explicitChatIdentifier },
+      options: params.options,
+    });
+    if (resolved) {
+      return resolved;
+    }
+    throw new Error(
+      `iMessage ${params.action} failed: chatGuid not found for chat_identifier:${explicitChatIdentifier}.`,
+    );
   }
   const rawTarget =
     readStringParam(params.actionParams, "to") ??
@@ -77,11 +111,30 @@ function resolveChatGuid(params: {
     if (target.kind === "chat_guid") {
       return target.chatGuid;
     }
+    if (target.kind === "chat_id" || target.kind === "chat_identifier") {
+      const resolved = await params.runtime.resolveChatGuidForTarget({
+        target,
+        options: params.options,
+      });
+      if (resolved) {
+        return resolved;
+      }
+      throw new Error(
+        `iMessage ${params.action} failed: chatGuid not found for ${formatUnresolvedTarget(target)}.`,
+      );
+    }
   }
   throw new Error(
-    `iMessage ${params.action} requires chatGuid or a chat_guid: target. ` +
-      "chat_id/chat_identifier resolution is not available for private API actions yet.",
+    `iMessage ${params.action} requires chatGuid, chatId, chatIdentifier, or a chat target.`,
   );
+}
+
+function formatUnresolvedTarget(
+  target: Extract<IMessageTarget, { kind: "chat_id" | "chat_identifier" }>,
+): string {
+  return target.kind === "chat_id"
+    ? `chat_id:${target.chatId}`
+    : `chat_identifier:${target.chatIdentifier}`;
 }
 
 function mapTapbackReaction(emoji?: string): string | undefined {
@@ -208,14 +261,17 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     };
     const opts = {
       cliPath: account.config.cliPath?.trim() || "imsg",
+      dbPath: account.config.dbPath?.trim() || undefined,
       timeoutMs: account.config.probeTimeoutMs,
       chatGuid: "",
     };
-    const chatGuid = () =>
-      resolveChatGuid({
+    const chatGuid = async () =>
+      await resolveChatGuid({
         action,
         actionParams: params,
         currentChannelId: toolContext?.currentChannelId,
+        runtime,
+        options: opts,
       });
 
     if (action === "react") {
@@ -231,7 +287,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       }
       const messageId = readStringParam(params, "messageId", { required: true });
       const partIndex = readNumberParam(params, "partIndex", { integer: true });
-      const resolvedChatGuid = chatGuid();
+      const resolvedChatGuid = await chatGuid();
       await runtime.sendReaction({
         chatGuid: resolvedChatGuid,
         messageId,
@@ -255,7 +311,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       }
       const partIndex = readNumberParam(params, "partIndex", { integer: true });
       const backwardsCompatMessage = readStringParam(params, "backwardsCompatMessage");
-      const resolvedChatGuid = chatGuid();
+      const resolvedChatGuid = await chatGuid();
       await runtime.editMessage({
         chatGuid: resolvedChatGuid,
         messageId,
@@ -271,7 +327,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       assertPrivateApiEnabled();
       const messageId = readStringParam(params, "messageId", { required: true });
       const partIndex = readNumberParam(params, "partIndex", { integer: true });
-      const resolvedChatGuid = chatGuid();
+      const resolvedChatGuid = await chatGuid();
       await runtime.unsendMessage({
         chatGuid: resolvedChatGuid,
         messageId,
@@ -289,7 +345,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         throw new Error("iMessage reply requires text or message.");
       }
       const partIndex = readNumberParam(params, "partIndex", { integer: true });
-      const resolvedChatGuid = chatGuid();
+      const resolvedChatGuid = await chatGuid();
       const result = await runtime.sendRichMessage({
         chatGuid: resolvedChatGuid,
         text,
@@ -309,7 +365,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       if (!text || !effectId) {
         throw new Error("iMessage sendWithEffect requires text/message and effect/effectId.");
       }
-      const resolvedChatGuid = chatGuid();
+      const resolvedChatGuid = await chatGuid();
       const result = await runtime.sendRichMessage({
         chatGuid: resolvedChatGuid,
         text,
@@ -325,7 +381,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       if (!displayName) {
         throw new Error("iMessage renameGroup requires displayName or name.");
       }
-      const resolvedChatGuid = chatGuid();
+      const resolvedChatGuid = await chatGuid();
       await runtime.renameGroup({
         chatGuid: resolvedChatGuid,
         displayName,
@@ -338,7 +394,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       assertPrivateApiEnabled();
       const filename =
         readStringParam(params, "filename") ?? readStringParam(params, "name") ?? "icon.png";
-      const resolvedChatGuid = chatGuid();
+      const resolvedChatGuid = await chatGuid();
       await runtime.setGroupIcon({
         chatGuid: resolvedChatGuid,
         buffer: decodeBase64Buffer(params, action),
@@ -354,7 +410,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       if (!address) {
         throw new Error(`iMessage ${action} requires address or participant.`);
       }
-      const resolvedChatGuid = chatGuid();
+      const resolvedChatGuid = await chatGuid();
       if (action === "addParticipant") {
         await runtime.addParticipant({
           chatGuid: resolvedChatGuid,
@@ -373,7 +429,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
 
     if (action === "leaveGroup") {
       assertPrivateApiEnabled();
-      const resolvedChatGuid = chatGuid();
+      const resolvedChatGuid = await chatGuid();
       await runtime.leaveGroup({
         chatGuid: resolvedChatGuid,
         options: { ...opts, chatGuid: resolvedChatGuid },
@@ -385,7 +441,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       assertPrivateApiEnabled();
       const filename = readStringParam(params, "filename", { required: true });
       const asVoice = readBooleanParam(params, "asVoice");
-      const resolvedChatGuid = chatGuid();
+      const resolvedChatGuid = await chatGuid();
       const result = await runtime.sendAttachment({
         chatGuid: resolvedChatGuid,
         buffer: decodeBase64Buffer(params, action),
