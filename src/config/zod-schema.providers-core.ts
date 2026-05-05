@@ -1328,6 +1328,23 @@ export const IrcConfigSchema = IrcAccountSchemaBase.extend({
   }
 });
 
+const IMessageActionSchema = z
+  .object({
+    reactions: z.boolean().optional(),
+    edit: z.boolean().optional(),
+    unsend: z.boolean().optional(),
+    reply: z.boolean().optional(),
+    sendWithEffect: z.boolean().optional(),
+    renameGroup: z.boolean().optional(),
+    setGroupIcon: z.boolean().optional(),
+    addParticipant: z.boolean().optional(),
+    removeParticipant: z.boolean().optional(),
+    leaveGroup: z.boolean().optional(),
+    sendAttachment: z.boolean().optional(),
+  })
+  .strict()
+  .optional();
+
 export const IMessageAccountSchemaBase = z
   .object({
     name: z.string().optional(),
@@ -1341,6 +1358,7 @@ export const IMessageAccountSchemaBase = z
       .string()
       .refine(isSafeScpRemoteHost, "expected SSH host or user@host (no spaces/options)")
       .optional(),
+    actions: IMessageActionSchema,
     service: z.union([z.literal("imessage"), z.literal("sms"), z.literal("auto")]).optional(),
     region: z.string().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),

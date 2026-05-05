@@ -28,4 +28,12 @@ describe("createIMessageTestPlugin", () => {
 
     expect(plugin.messaging?.normalizeTarget?.(prefixedHandle)).toBe("+442079460958");
   });
+
+  it("exposes seeded private API actions for binding contract tests", () => {
+    const plugin = createIMessageTestPlugin();
+
+    expect(plugin.actions?.describeMessageTool({} as never)?.actions).toEqual(
+      expect.arrayContaining(["react", "edit", "unsend", "reply", "sendWithEffect", "upload-file"]),
+    );
+  });
 });

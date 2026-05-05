@@ -12,6 +12,12 @@ export { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 
 export type IMessageProbe = BaseProbeResult & {
   fatal?: boolean;
+  privateApi?: {
+    available: boolean;
+    v2Ready: boolean;
+    selectors: Record<string, boolean>;
+    error?: string;
+  };
 };
 
 export type IMessageProbeOptions = {
@@ -27,6 +33,7 @@ type RpcSupportResult = {
 };
 
 const rpcSupportCache = new Map<string, RpcSupportResult>();
+const bridgeStatusCache = new Map<string, IMessageProbe["privateApi"]>();
 
 async function probeRpcSupport(cliPath: string, timeoutMs: number): Promise<RpcSupportResult> {
   const cached = rpcSupportCache.get(cliPath);
@@ -60,6 +67,83 @@ async function probeRpcSupport(cliPath: string, timeoutMs: number): Promise<RpcS
   }
 }
 
+function parseStatusPayload(stdout: string): Record<string, unknown> | null {
+  const lines = stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  for (const line of lines.toReversed()) {
+    try {
+      const value = JSON.parse(line);
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        return value as Record<string, unknown>;
+      }
+    } catch {
+      // Continue scanning earlier JSONL records.
+    }
+  }
+  return null;
+}
+
+function selectorsFromPayload(payload: Record<string, unknown>): Record<string, boolean> {
+  const raw = payload.selectors;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return {};
+  }
+  const selectors: Record<string, boolean> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (typeof value === "boolean") {
+      selectors[key] = value;
+    }
+  }
+  return selectors;
+}
+
+export function getCachedIMessagePrivateApiStatus(
+  accountIdOrCliPath?: string | null,
+): IMessageProbe["privateApi"] | undefined {
+  const key = accountIdOrCliPath?.trim() || "imsg";
+  return bridgeStatusCache.get(key);
+}
+
+export async function probeIMessagePrivateApi(
+  cliPath: string,
+  timeoutMs: number,
+): Promise<NonNullable<IMessageProbe["privateApi"]>> {
+  const key = cliPath.trim() || "imsg";
+  const cached = bridgeStatusCache.get(key);
+  if (cached) {
+    return cached;
+  }
+  try {
+    const result = await runCommandWithTimeout([key, "status", "--json"], { timeoutMs });
+    const combined = `${result.stdout}\n${result.stderr}`.trim();
+    const payload = parseStatusPayload(result.stdout);
+    const selectors = payload ? selectorsFromPayload(payload) : {};
+    const advancedFeatures = payload?.advanced_features === true;
+    const v2Ready = payload?.v2_ready === true;
+    const status = {
+      available: result.code === 0 && advancedFeatures && v2Ready,
+      v2Ready,
+      selectors,
+      ...(result.code === 0
+        ? {}
+        : { error: combined || `imsg status --json failed (code ${String(result.code)})` }),
+    };
+    bridgeStatusCache.set(key, status);
+    return status;
+  } catch (err) {
+    const status = {
+      available: false,
+      v2Ready: false,
+      selectors: {},
+      error: String(err),
+    };
+    bridgeStatusCache.set(key, status);
+    return status;
+  }
+}
+
 /**
  * Probe iMessage RPC availability.
  * @param timeoutMs - Explicit timeout in ms. If undefined, uses config or default.
@@ -90,6 +174,8 @@ export async function probeIMessage(
     };
   }
 
+  const privateApi = await probeIMessagePrivateApi(cliPath, effectiveTimeout);
+
   const client = await createIMessageRpcClient({
     cliPath,
     dbPath,
@@ -97,9 +183,9 @@ export async function probeIMessage(
   });
   try {
     await client.request("chats.list", { limit: 1 }, { timeoutMs: effectiveTimeout });
-    return { ok: true };
+    return { ok: true, privateApi };
   } catch (err) {
-    return { ok: false, error: String(err) };
+    return { ok: false, error: String(err), privateApi };
   } finally {
     await client.stop();
   }
