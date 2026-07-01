@@ -172,10 +172,20 @@ type VisibleTextSuppressionReason =
 
 const POLL_VOTE_ECHO_TTL_MS = 30_000;
 
+// Sheds emoji ANYWHERE, then trailing sentence punctuation. Emoji land on both
+// sides asymmetrically: iMessage poll options suffix them ("Lobster 🦞 "), while
+// the agent's echo prefixes them ("🦞 Lobster."), so a leading-only strip left
+// "lobster 🦞" != "lobster" and the redundant text leaked. Also drop
+// variation-selector/ZWJ/skin-tone/keycap combiners so multi-codepoint emoji
+// clear fully; each run becomes a space so "a🦞b" can't fuse. Internal
+// punctuation stays, so "C#", "C++", "Node.js" remain distinct. An emoji-only
+// label normalizes to empty, which the guard below refuses to suppress on.
 function normalizePollEchoText(text: string): string {
   return text
-    .replace(/^[\p{Extended_Pictographic}️‍]+\s+/u, "")
-    .replace(/[.!?\s]+$/u, "")
+    .replace(/[\p{Extended_Pictographic}\u{FE0F}\u{200D}\u{20E3}\u{1F3FB}-\u{1F3FF}]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .replace(/[.!?]+$/u, "")
     .trim()
     .toLowerCase();
 }
