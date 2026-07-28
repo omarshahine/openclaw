@@ -153,7 +153,7 @@ export function resolveDirectCronFallbackSourceIndex(
 }
 
 function formatTargetCronDeliveryAwarenessText(text: string): string {
-  return `A scheduled cron job delivered this message to this channel:\n${text}`;
+  return `A scheduled automation delivered this message to this channel:\n${text}`;
 }
 
 export function formatTargetCronDeliveryFailureAwarenessText(params: {
@@ -169,7 +169,7 @@ export function formatTargetCronDeliveryFailureAwarenessText(params: {
     targetParts.push(`thread ${params.threadId}`);
   }
   return [
-    "A scheduled cron job attempted to deliver to this channel, but delivery failed.",
+    "A scheduled automation attempted to deliver to this channel, but delivery failed.",
     `Job: ${params.job.name || params.job.id}`,
     `Target: ${targetParts.join(" ")}`,
     `Delivery error: ${formatErrorMessage(params.error)}`,
