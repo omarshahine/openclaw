@@ -222,8 +222,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 62620,
-    "roughTokens": 15655
+    "chars": 62622,
+    "roughTokens": 15656
   },
   "openClawDeveloperInstructions": {
     "chars": 2369,
@@ -234,8 +234,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6700
   },
   "totalWithDynamicToolsJson": {
-    "chars": 89419,
-    "roughTokens": 22355
+    "chars": 89421,
+    "roughTokens": 22356
   },
   "userInputText": {
     "chars": 1271,
@@ -693,7 +693,7 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
           "type": "string"
         },
         "scratch": {
-          "description": "Complete replacement for heartbeat monitor prose. Recurring schedules belong in cron jobs, not scratch.",
+          "description": "Complete replacement for heartbeat monitor prose. Recurring schedules belong in automations, not scratch.",
           "type": "string"
         },
         "summary": {
